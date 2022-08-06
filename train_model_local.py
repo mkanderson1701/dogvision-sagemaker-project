@@ -26,13 +26,15 @@ class MyClassifier(nn.Module):
     def __init__(self, hidden_units, dropout_p):
         super(MyClassifier, self).__init__()
         logger.info('initializing classifier object')
-        self.fc1 = nn.Linear(2048, hidden_units)
-        self.fc2 = nn.Linear(hidden_units, 133)
+        self.fc1 = nn.Linear(2048, 512)
+        self.fc2 = nn.Linear(512, hidden_units)
+        self.fc3 = nn.Linear(hidden_units, 133)
         self.dropout = nn.Dropout(p=dropout_p)
 
     def forward(self, input):
         out = self.dropout(F.relu(self.fc1(input)))
-        out = self.fc2(out)
+        out = self.dropout(F.relu(self.fc2(out)))
+        out = self.fc3(out)
         return out
 
 
@@ -42,23 +44,34 @@ def test(model, test_loader, criterion):
     logger.info('enter testing function')
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    log_interval = 5
     test_loss = 0
-    correct = 0
+    correct_total = 0
+    num_tested = 0
     with torch.no_grad():
-        for _, (data, targets) in enumerate(test_loader):
+        for k, (data, targets) in enumerate(test_loader):
             data, targets = data.to(device), targets.to(device)
             output = model(data)
             loss = criterion(output, targets)
+            print(f'loss: {loss}')
+            print(f'loss.item(): {loss.item()}')
             test_loss += loss.item()
-            pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
-            correct += pred.eq(targets.view_as(pred)).sum().item()
+            print(f'test_loss: {test_loss}')
 
-    test_loss /= len(test_loader.dataset)
-    logger.info(
-        'Test set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-            test_loss, correct, len(test_loader.dataset), 100.0 * correct / len(test_loader.dataset)
-        )
-    )
+            probs = F.softmax(output, dim=1)
+            top_p, top_class = probs.topk(1, dim=1)
+            top_class = top_class.T.squeeze()
+            correct_batch = top_class.eq(targets).sum().item()
+            correct_total += correct_batch
+            num_tested += len(top_class)
+            if k % log_interval == 0:
+                logger.info(f'Testing batch {k}...')
+                print(test_loss)
+                print(len(test_loader))
+
+    logger.info(f'Test set: Average loss: {test_loss / len(test_loader)}, '
+                f'Accuracy: {correct_total}/{num_tested} ('
+                f'{correct_total/num_tested*100:.2f}%)\n')
 
 def train(model, train_loader, valid_loader, criterion, optimizer, args):
     logger.info('enter training function')
@@ -88,6 +101,7 @@ def train(model, train_loader, valid_loader, criterion, optimizer, args):
     for epoch in range(1, args.epochs + 1):
         model.train()
         for i, (data, targets) in enumerate(train_loader, 1):
+            print(f'main loop')
             data, targets = data.to(device), targets.to(device)
             optimizer.zero_grad()
             output = model(data)
@@ -98,7 +112,8 @@ def train(model, train_loader, valid_loader, criterion, optimizer, args):
 
             if i % log_interval == 0:
                 valid_loss = 0
-                accuracy = 0
+                correct_total = 0
+                num_tested = 0
                 with torch.no_grad():
                     model.eval()
                     for j, (data, targets) in enumerate(valid_loader):
@@ -106,36 +121,33 @@ def train(model, train_loader, valid_loader, criterion, optimizer, args):
                         output = model(data)
                         loss = criterion(output, targets)
                         valid_loss += loss.item()
-                        top_p, top_class = output.topk(1, dim=1)
-                        equals = top_class == targets.view(*top_class.shape)
-                        accuracy += torch.mean(equals.type(torch.FloatTensor)).item()
 
-                logger.info(f"Epoch {epoch}/{args.epochs}... "
-                f"Train loss: {running_loss/log_interval:.3f}.. "
-                f"Validation loss: {valid_loss/len(valid_loader):.3f}.. "
-                f"Validation accuracy: {accuracy/len(valid_loader):.3f}")
+                        probs = F.softmax(output, dim=1)
+                        top_p, top_class = probs.topk(1, dim=1)
+                        top_class = top_class.T.squeeze()
+                        correct_batch = top_class.eq(targets).sum().item()
+                        correct_total += correct_batch
+                        num_tested += len(top_class)
 
-                logger.info(
-                    'Train Epoch: {} [{}/{} ({:.0f}%)] Loss: {:.6f}'.format(
-                        epoch,
-                        i * args.batch_size,
-                        len(train_loader.sampler),
-                        100.0 * i / len(train_loader),
-                        running_loss / log_interval,
-                    )
-                )
+                logger.info(f'Epoch {epoch}/{args.epochs}... '
+                            f'Train loss: {running_loss / log_interval:.3f}.. '
+                            f'Validation loss: {valid_loss / len(valid_loader):.3f}.. '
+                            f'Validation accuracy: {correct_total / num_tested:.3f}')
+
+                # logger.info(
+                #     'Train Epoch: {} [{}/{} ({:.0f}%)] Loss: {:.6f}'.format(
+                #         epoch,
+                #         correct_total,
+                #         num_tested,
+                #         100.0 * correct_total / num_tested,
+                #         running_loss / log_interval,
+                #     )
+                # )
                 running_loss = 0
         
         test(model, valid_loader, device)
 
 
-    """
-    TOTO
-    implement save
-    """
-
-    # save_model(model, args.model_dir)
-    
 def net(args):
     logger.info('enter net function')
     logger.info('load pretrained model')
@@ -151,6 +163,7 @@ def net(args):
     model.fc = MyClassifier(args.hidden_units, args.dropout)
 
     return model
+
 
 def create_data_loader(args):
     logger.info('creating data loaders')
@@ -202,6 +215,15 @@ def create_data_loader(args):
     return train_loader, valid_loader, test_loader, class_to_idx
 
 
+def save_model(model, optimizer, args):
+    logger.info('Saving model to {args.model_dir}...')
+    torch.save({
+        'model_state_dict': model.fc.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'args': args
+    }, args.model_dir)
+
+
 def main(args):
     logging.info('enter main')
 
@@ -221,14 +243,15 @@ def main(args):
 
     # train model
     logging.info('start training')
-    model=train(model, train_loader, valid_loader, criterion, optimizer, args)
+    # train(model, train_loader, valid_loader, criterion, optimizer, args)
     
     logging.info('start testing run')
     test(model, test_loader, criterion)
     
     # Save the trained model
     with open(os.path.join(args.model_dir, 'model.pth'), 'wb') as f:
-        torch.save(model.state_dict(), f)
+        logger.info('Saving model...')
+        
 
 if __name__=='__main__':
 
