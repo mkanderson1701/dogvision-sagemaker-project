@@ -1,4 +1,6 @@
 import argparse
+import random
+import string
 import os
 import numpy as np
 import logging
@@ -16,7 +18,7 @@ from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True # fix pillow/pytorch import issue with some dog pics
 # from awsio.python.lib.io.s3.s3dataset import S3Dataset
 
-LDEBUG = True
+LDEBUG = False
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -26,13 +28,15 @@ class MyClassifier(nn.Module):
     def __init__(self, hidden_units, dropout_p):
         super(MyClassifier, self).__init__()
         logger.info('initializing classifier object')
-        self.fc1 = nn.Linear(2048, hidden_units)
-        self.fc2 = nn.Linear(hidden_units, 133)
+        self.fc1 = nn.Linear(2048, 512)
+        self.fc2 = nn.Linear(512, hidden_units)
+        self.fc3 = nn.Linear(hidden_units, 133)
         self.dropout = nn.Dropout(p=dropout_p)
 
     def forward(self, input):
         out = self.dropout(F.relu(self.fc1(input)))
-        out = self.fc2(out)
+        out = self.dropout(F.relu(self.fc2(out)))
+        out = self.fc3(out)
         return out
 
 
@@ -42,23 +46,34 @@ def test(model, test_loader, criterion):
     logger.info('enter testing function')
     model.eval()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    log_interval = 5
     test_loss = 0
-    correct = 0
+    correct_total = 0
+    num_tested = 0
     with torch.no_grad():
-        for _, (data, targets) in enumerate(test_loader):
+        for k, (data, targets) in enumerate(test_loader):
             data, targets = data.to(device), targets.to(device)
             output = model(data)
             loss = criterion(output, targets)
+            print(f'loss: {loss}')
+            print(f'loss.item(): {loss.item()}')
             test_loss += loss.item()
-            pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
-            correct += pred.eq(targets.view_as(pred)).sum().item()
+            print(f'test_loss: {test_loss}')
 
-    test_loss /= len(test_loader.dataset)
-    logger.info(
-        'Test set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
-            test_loss, correct, len(test_loader.dataset), 100.0 * correct / len(test_loader.dataset)
-        )
-    )
+            probs = F.softmax(output, dim=1)
+            top_p, top_class = probs.topk(1, dim=1)
+            top_class = top_class.T.squeeze()
+            correct_batch = top_class.eq(targets).sum().item()
+            correct_total += correct_batch
+            num_tested += len(top_class)
+            if k % log_interval == 0:
+                logger.info(f'Testing batch {k}...')
+                print(test_loss)
+                print(len(test_loader))
+
+    logger.info(f'Test set: Average loss: {test_loss / len(test_loader)}, '
+                f'Accuracy: {correct_total}/{num_tested} ('
+                f'{correct_total/num_tested*100:.2f}%)\n')
 
 def train(model, train_loader, valid_loader, criterion, optimizer, args):
     logger.info('enter training function')
@@ -98,7 +113,8 @@ def train(model, train_loader, valid_loader, criterion, optimizer, args):
 
             if i % log_interval == 0:
                 valid_loss = 0
-                accuracy = 0
+                correct_total = 0
+                num_tested = 0
                 with torch.no_grad():
                     model.eval()
                     for j, (data, targets) in enumerate(valid_loader):
@@ -106,36 +122,21 @@ def train(model, train_loader, valid_loader, criterion, optimizer, args):
                         output = model(data)
                         loss = criterion(output, targets)
                         valid_loss += loss.item()
-                        top_p, top_class = output.topk(1, dim=1)
-                        equals = top_class == targets.view(*top_class.shape)
-                        accuracy += torch.mean(equals.type(torch.FloatTensor)).item()
 
-                logger.info(f"Epoch {epoch}/{args.epochs}... "
-                f"Train loss: {running_loss/log_interval:.3f}.. "
-                f"Validation loss: {valid_loss/len(valid_loader):.3f}.. "
-                f"Validation accuracy: {accuracy/len(valid_loader):.3f}")
+                        probs = F.softmax(output, dim=1)
+                        top_p, top_class = probs.topk(1, dim=1)
+                        top_class = top_class.T.squeeze()
+                        correct_batch = top_class.eq(targets).sum().item()
+                        correct_total += correct_batch
+                        num_tested += len(top_class)
 
-                logger.info(
-                    'Train Epoch: {} [{}/{} ({:.0f}%)] Loss: {:.6f}'.format(
-                        epoch,
-                        i * args.batch_size,
-                        len(train_loader.sampler),
-                        100.0 * i / len(train_loader),
-                        running_loss / log_interval,
-                    )
-                )
+                logger.info(f'Epoch {epoch}/{args.epochs}... '
+                            f'Train loss: {running_loss / log_interval:.3f}.. '
+                            f'Validation loss: {valid_loss / len(valid_loader):.3f}.. '
+                            f'Validation accuracy: {correct_total / num_tested:.3f}')
                 running_loss = 0
-        
-        test(model, valid_loader, device)
 
 
-    """
-    TOTO
-    implement save
-    """
-
-    # save_model(model, args.model_dir)
-    
 def net(args):
     logger.info('enter net function')
     logger.info('load pretrained model')
@@ -151,6 +152,7 @@ def net(args):
     model.fc = MyClassifier(args.hidden_units, args.dropout)
 
     return model
+
 
 def create_data_loader(args):
     logger.info('creating data loaders')
@@ -171,16 +173,18 @@ def create_data_loader(args):
         ]
     )
 
-    if not LDEBUG:
-        train_dir = os.environ['SM_CHANNEL_TRAIN']
-        logger.debug(train_dir)
-        valid_dir = os.environ['SM_CHANNEL_VAL']
-        test_dir = os.environ['SM_CHANNEL_TEST']
-    else:
+    print(f'LDEBUG: {LDEBUG}')
+
+    if LDEBUG:
         train_dir = './dogImages/train'
         logger.debug(train_dir)
         valid_dir = './dogImages/valid'
         test_dir = './dogImages/test'
+    else:
+        train_dir = os.environ['SM_CHANNEL_TRAIN']
+        logger.debug(train_dir)
+        valid_dir = os.environ['SM_CHANNEL_VAL']
+        test_dir = os.environ['SM_CHANNEL_TEST']
 
     train_data = datasets.ImageFolder(train_dir, transform=train_transforms)
     valid_data = datasets.ImageFolder(valid_dir, transform=vt_transforms)
@@ -202,59 +206,79 @@ def create_data_loader(args):
     return train_loader, valid_loader, test_loader, class_to_idx
 
 
+def save_model(model, optimizer, args):
+    filepath = os.path.join(args.model_dir, "model.pth")
+    logger.info('Saving model to {filepath}...')
+    torch.save({
+        'model_state_dict': model.fc.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'args': args
+    }, filepath)
+
+
 def main(args):
-    logging.info('enter main')
+    logger.info('enter main')
+    logger.info(args)
 
     # Initialize the model
     model=net(args)
     
-    # CEL for classification, Adam
-    logging.info('configure loss, optimizer')
+    # CEL for classification
+    logger.info('configure loss, optimizer')
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.fc.parameters(), lr=args.learning_rate)
 
     # gpu if youve got em
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+        logger.info('cuda device ENABLED')
+    else:
+        device = torch.device('cpu')
+        logger.info('cuda device NOT FOUND')
+
     model.to(device)
 
     train_loader, valid_loader, test_loader, cdict = create_data_loader(args)
 
     # train model
-    logging.info('start training')
-    model=train(model, train_loader, valid_loader, criterion, optimizer, args)
-
-    logging.info('start testing run')
+    logger.info('start training')
+    train(model, train_loader, valid_loader, criterion, optimizer, args)
+    
+    logger.info('start testing run')
     test(model, test_loader, criterion)
     
     # Save the trained model
-    with open(os.path.join(args.model_dir, 'model.pth'), 'wb') as f:
-        torch.save(model.state_dict(), f)
+    save_model(model, optimizer, args)
+        
 
-if __name__=='__main__':
-
-    LDEBUG = True
+if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='PyTorch ResNet-based dog classifier')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size for training (default: 32)')
     parser.add_argument('--test-batch-size', type=int, default=32, metavar='N',
                         help='input batch size for testing (default: 32)')
-    parser.add_argument('--epochs', type=int, default=1, metavar='N',
+    parser.add_argument('--epochs', type=int, default=5, metavar='N',
                         help='number of epochs to train (default: 2)')
-    parser.add_argument('--learning-rate', type=float, default=0.1, metavar='LR',
-                        help='learning rate (default: 0.1)')
+    parser.add_argument('--learning-rate', type=float, default=0.01, metavar='LR',
+                        help='learning rate (default: 0.01)')
     parser.add_argument('--hidden-units', type=int, default=256, metavar='N',
                         help='number of classifier hidden units (default: 256)')
     parser.add_argument('--dropout', type=float, default=0.0, metavar='N',
                         help='dropout rate for hidden layer (default: 0.0)')
-    if not LDEBUG:
-        parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
-    else:
+    if LDEBUG:
         parser.add_argument('--model-dir', type=str, default='./')
-    parser.add_argument('--num-gpus', type=int, default=0)
-    args = parser.parse_args()
+    else:
+        parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
 
-    train_kwargs = {'batch_size': args.batch_size}
-    test_kwargs = {'batch_size': args.test_batch_size}
+    parser.add_argument('--num-gpus', type=int, default=0)
+    randstr = ''
+
+    for i in range(0, 8):
+        randstr += random.choice(string.ascii_lowercase + string.ascii_uppercase + string.digits)
+
+    parser.add_argument('--model_name', type=str,
+                        default=f'model_{randstr}.pth', metavar='N')
+    args = parser.parse_args()
     
     main(args)
