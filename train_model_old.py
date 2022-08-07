@@ -1,4 +1,6 @@
 import argparse
+import random
+import string
 import os
 import numpy as np
 import logging
@@ -200,6 +202,9 @@ def create_data_loader(args):
             pin_memory=pin_mem, shuffle=True)
 
     return train_loader, valid_loader, test_loader, class_to_idx
+
+def save_model(model, path):
+    pass
 
 
 def main(args):
