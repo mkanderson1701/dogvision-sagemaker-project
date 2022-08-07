@@ -6,15 +6,13 @@ import numpy as np
 import logging
 import torch
 import sys
-import time
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torchvision
 import torchvision.models as models
 from torchvision import datasets, transforms
-from torchvision.models import resnet152
-# from torchvision.models import ResNet152_Weights # not in docker img
+from torchvision.models import resnet152, ResNet152_Weights
 from torch.utils.data import DataLoader
 from PIL import Image, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True # fix pillow/pytorch import issue with some dog pics
@@ -70,8 +68,8 @@ def test(model, test_loader, criterion):
             num_tested += len(top_class)
             if k % log_interval == 0:
                 logger.info(f'Testing batch {k}...')
-                # print(test_loss)
-                # print(len(test_loader))
+                print(test_loss)
+                print(len(test_loader))
 
     logger.info(f'Test set: Average loss: {test_loss / len(test_loader)}, '
                 f'Accuracy: {correct_total}/{num_tested} ('
@@ -82,14 +80,28 @@ def train(model, train_loader, valid_loader, criterion, optimizer, args):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'torch.device set to {device}')
 
+    logger.debug(
+        'Processes {}/{} ({:.0f}%) of train data'.format(
+            len(train_loader.sampler),
+            len(train_loader.dataset),
+            100.0 * len(train_loader.sampler) / len(train_loader.dataset),
+        )
+    )
+
+    logger.debug(
+        'Processes {}/{} ({:.0f}%) of test data'.format(
+            len(valid_loader.sampler),
+            len(valid_loader.dataset),
+            100.0 * len(valid_loader.sampler) / len(valid_loader.dataset),
+        )
+    )
+
     model = model.to(device)
-    
     log_interval = 5
     running_loss = 0
 
     for epoch in range(1, args.epochs + 1):
         model.train()
-        start_time = time.time()
         for i, (data, targets) in enumerate(train_loader, 1):
             data, targets = data.to(device), targets.to(device)
             optimizer.zero_grad()
@@ -123,17 +135,13 @@ def train(model, train_loader, valid_loader, criterion, optimizer, args):
                             f'Validation loss: {valid_loss / len(valid_loader):.3f}.. '
                             f'Validation accuracy: {correct_total / num_tested:.3f}')
                 running_loss = 0
-        end_time = time.time()
-        logger.info(f'Epoch duration: {end_time - start_time}')
 
 
 def net(args):
     logger.info('enter net function')
     logger.info('load pretrained model')
-    # weights = ResNet152_Weights.IMAGENET1K_V2
-    # weights = 'IMAGENET1K_V2'
-    # sagemaker pytorch too old for the weights param
-    model = resnet152(pretrained=True)
+    weights = ResNet152_Weights.IMAGENET1K_V2
+    model = resnet152(weights=weights)
     
     # dont re-train the main network
     for param in model.parameters():
@@ -175,7 +183,7 @@ def create_data_loader(args):
     else:
         train_dir = os.environ['SM_CHANNEL_TRAIN']
         logger.debug(train_dir)
-        valid_dir = os.environ['SM_CHANNEL_VALID']
+        valid_dir = os.environ['SM_CHANNEL_VAL']
         test_dir = os.environ['SM_CHANNEL_TEST']
 
     train_data = datasets.ImageFolder(train_dir, transform=train_transforms)
@@ -199,7 +207,7 @@ def create_data_loader(args):
 
 
 def save_model(model, optimizer, args):
-    filepath = os.path.join(args.model_dir, args.model_name)
+    filepath = os.path.join(args.model_dir, "model.pth")
     logger.info('Saving model to {filepath}...')
     torch.save({
         'model_state_dict': model.fc.state_dict(),
@@ -251,7 +259,7 @@ if __name__ == '__main__':
     parser.add_argument('--test-batch-size', type=int, default=32, metavar='N',
                         help='input batch size for testing (default: 32)')
     parser.add_argument('--epochs', type=int, default=5, metavar='N',
-                        help='number of epochs to train (default: 5)')
+                        help='number of epochs to train (default: 2)')
     parser.add_argument('--learning-rate', type=float, default=0.01, metavar='LR',
                         help='learning rate (default: 0.01)')
     parser.add_argument('--hidden-units', type=int, default=256, metavar='N',
