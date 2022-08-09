@@ -18,7 +18,7 @@ The hyperparameter search included:
 
 These ranges are intentionally narrow, to reduce computing time during the search.
 
-(https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/hpo_tuning_2022-08-09.jpg?raw=true)
+[HP TUNING SCREENSHOT](https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/hpo_tuning_2022-08-09.jpg?raw=true)
 
 The final values ended up being LR 0.001, Batch size 64, hidden units 256, dropout 0.0. These values might vary with a more complex network or longer training.
 
@@ -26,14 +26,14 @@ The final values ended up being LR 0.001, Batch size 64, hidden units 256, dropo
 
 Hook for the SageMaker debugging and performance profiling are added. These track a number of metrics including CPU / GPU utilization, memory, timing, and so on.
 
-(https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/training_job_2022-08-09.jpg?raw=true)
+[TRAINING JOB](https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/training_job_2022-08-09.jpg?raw=true)
 
 ### Results
 During my runs I found the single GPU under ml.g4dn.xlarge was underutilized. Adding num_workers=4 for the dataloader increased the network to full utilization.
 
 Note that this metric was in early runs, and no longer an issue by the time output below was collected.
 
-[PROFILER REPORT AVAILABLE HERE](https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/profiler-report-sm-dbc-pytorch.html)
+[PROFILER REPORT (HTML)](https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/profiler-report-sm-dbc-pytorch.html)
 
 
 ## Model Deployment
@@ -41,4 +41,4 @@ The model is deployed using sagemaker.pytorch.model.PyTorchModel, rather than di
 
 This allowed me to easily drop in a replacement (infer.py) for the deployment python script while using an existing model image. Model saves, loads, model_fn() and image preprocessing required a lot of trial and error, and retraining the image with a new train_deploy.py each time was very slow.
 
-(https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/inference_endpoint_2022-08-09.jpg?raw=true)
+[INFERENCE ENDPOINT](https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/inference_endpoint_2022-08-09.jpg?raw=true)
