@@ -37,8 +37,8 @@ Note that this metric was in early runs, and no longer an issue by the time outp
 
 
 ## Model Deployment
-**TODO**: Give an overview of the deployed model and instructions on how to query the endpoint with a sample input.
+The model is deployed using sagemaker.pytorch.model.PyTorchModel, rather than directly from the existing estimator.
 
-**TODO** Remember to provide a screenshot of the deployed active endpoint in Sagemaker.
+This allowed me to easily drop in a replacement (infer.py) for the deployment python script while using an existing model image. Model saves, loads, model_fn() and image preprocessing required a lot of trial and error, and retraining the image with a new train_deploy.py each time was very slow.
 
-
+(https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/inference_endpoint_2022-08-09.jpg?raw=true)
