@@ -9,29 +9,31 @@ The provided dataset is the dogbreed classification dataset which can be found i
 
 SageMaker's hyperparameter search is provided a range of values to try. It performs several training runs, and reports back the training loss given various combinations of parameters.
 
+The hyperparameter search included:
+
+* learning-rate:  (continuous range) 0.0001 - 0.02
+* batch-size:  (discrete values) 32, 64, 128
+* hidden-units: (discrete values) 128, 256
+* dropout:  (continuous range) 0.0 - 0.5
+
+These ranges are intentionally narrow, to reduce computing time during the search.
+
+(https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/hpo_tuning_2022-08-09.jpg?raw=true)
+
+The final values ended up being LR 0.001, Batch size 64, hidden units 256, dropout 0.0. These values might vary with a more complex network or longer training.
+
 ## Debugging and Performance
 
+Hook for the SageMaker debugging and performance profiling are added. These track a number of metrics including CPU / GPU utilization, memory, timing, and so on.
 
-
-### Access
-Upload the data to an S3 bucket through the AWS Gateway so that SageMaker has access to the data. 
-
-## Hyperparameter Tuning
-What kind of model did you choose for this experiment and why? Give an overview of the types of parameters and their ranges used for the hyperparameter search
-
-Remember that your README should:
-- Include a screenshot of completed training jobs
-- Logs metrics during the training process
-- Tune at least two hyperparameters
-- Retrieve the best best hyperparameters from all your training jobs
-
-## Debugging and Profiling
-**TODO**: Give an overview of how you performed model debugging and profiling in Sagemaker
+(https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/training_job_2022-08-09.jpg?raw=true)
 
 ### Results
-**TODO**: What are the results/insights did you get by profiling/debugging your model?
+During my runs I found the single GPU under ml.g4dn.xlarge was underutilized. Adding num_workers=4 for the dataloader increased the network to full utilization.
 
-**TODO** Remember to provide the profiler html/pdf file in your submission.
+Note that this metric was in early runs, and no longer an issue by the time output below was collected.
+
+[PROFILER REPORT AVAILABLE HERE](https://github.com/mkanderson1701/dogvision-sagemaker-project/blob/master/profiler-report-sm-dbc-pytorch.html)
 
 
 ## Model Deployment
@@ -39,5 +41,4 @@ Remember that your README should:
 
 **TODO** Remember to provide a screenshot of the deployed active endpoint in Sagemaker.
 
-## Standout Suggestions
-**TODO (Optional):** This is where you can provide information about any standout suggestions that you have attempted.
+
